@@ -1,5 +1,3 @@
-import '@shgysk8zer0/polyfills';
-
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
