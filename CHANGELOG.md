@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.0.2] - 2024-12-12
+
+### Added
+- Add support for deriving keys from passwords
+- Add support for encrypting/decrypting files
+- Add new constants for better consistency
+
 ## [v1.0.1] - 2024-12-11
 
 ### Fixed

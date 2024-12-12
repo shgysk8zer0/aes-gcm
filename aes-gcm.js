@@ -1,6 +1,15 @@
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
+// Cryptographic Algorithm constants
+export const IV_LENGTH = 12;
+export const AES_CTR = 'AES-CTR';
+export const AES_GCM = 'AES-GCM';
+export const AES_CBC = 'AES-CBC';
+export const DEFAULT_ALGO_NAME = AES_GCM;
+export const DEFAULT_LENGTH = 256;
+export const KEY_OPS = ['encrypt', 'decrypt'];
+
 // Hashing Algorithms
 export const SHA256 = 'SHA-256';
 export const SHA384 = 'SHA-384';
@@ -15,6 +24,10 @@ export const UI8_ARR = 'ui8';
 export const HEX = 'hex';
 export const TEXT = 'text';
 export const DEFAULT_OUTPUT = UI8_ARR;
+
+// File-related constants
+export const FILE_EXT = '.aes-enc';
+export const FILE_TYPE_PREFIX = 'application/aes-encrypted+';
 
 /**
  * Constant-time comparison of two ArrayBuffers
@@ -54,11 +67,33 @@ function _safeBufferCompare(a, b) {
  * @param {boolean} [options.extractable=true] Whether the key should be extractable for use outside the current context.
  * @returns {Promise<CryptoKey>} The newly generated secret key.
  */
-export async function generateSecretKey({ length = 256, extractable = true } = {}) {
-	return await crypto.subtle.generateKey({
-		name: 'AES-GCM',
-		length,
-	}, extractable, ['encrypt', 'decrypt']);
+export async function generateSecretKey({
+	length = DEFAULT_LENGTH,
+	extractable = true,
+} = {}) {
+	return await crypto.subtle.generateKey({ name: AES_GCM, length, }, extractable, KEY_OPS);
+}
+
+/**
+ * Creates an ephemeral CryptoKey from a given password using the AES-GCM algorithm.
+ *
+ * @param {string} pass The password to use for key derivation.
+ * @param {object} options
+ * @param {number} [options.length=256] The desired key length in bits.
+ * @param {boolean} [options.extractable=false] Whether the key should be extractable from the WebCrypto API.
+ * @returns {Promise<CryptoKey>} The generated `CryptoKey`.
+ * @throws {TypeError} Thrown if password is not a string, is an empty string, or if the config to generate the key is invalid.
+ */
+export async function createSecretKeyFromPassword(pass, {
+	length = DEFAULT_LENGTH,
+	extractable = false,
+} = {}) {
+	if (typeof pass !== 'string' || pass.length === 0) {
+		throw new TypeError('Key password must be a non-empty string.');
+	} else {
+		const hash = await crypto.subtle.digest(SHA256, encoder.encode(pass));
+		return await crypto.subtle.importKey('raw', hash, { name: AES_GCM, length }, extractable, KEY_OPS);
+	}
 }
 
 /**
@@ -87,7 +122,7 @@ export async function getSecretKey(prop = 'SECRET_KEY') {
  * @throws {TypeError} - Thrown if the key is invalid, IV is invalid, or the data type is not supported for encryption.
  */
 export async function encrypt(key, thing, {
-	iv = crypto.getRandomValues(new Uint8Array(12)),
+	iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH)),
 	output = DEFAULT_OUTPUT,
 } = {}) {
 	if (! (key instanceof CryptoKey) || ! key.usages.includes('encrypt')) {
@@ -259,7 +294,7 @@ export async function hash(thing, {
  */
 export async function sign(key, thing, {
 	algo = DEFAULT_ALGO,
-	iv = crypto.getRandomValues(new Uint8Array(12)),
+	iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH)),
 	output = DEFAULT_OUTPUT,
 } = {}) {
 	const hashed = await hash(thing, { algo, output: BUFFER });
@@ -324,4 +359,46 @@ export async function verifySignature(key, source, signature, {
 } = {}) {
 	const expected = await decrypt(key, signature, { output: BUFFER, input });
 	return await verify(source, expected, { algo, input: BUFFER });
+}
+
+/**
+ * Encrypts a file and wraps it in a custom file extension and MIME type.
+ *
+ * @param {CryptoKey} key A cryptographic key for encryption.
+ * @param {File} file The file to encrypt.
+ * @returns {Promise<File>} A new File instance with encrypted content.
+ * @throws {TypeError} If `file` is not a valid File object or `key` is not a valid `CryptoKey`
+ */
+export async function encryptFile(key, file) {
+	if (! (file instanceof File)) {
+		throw new TypeError('encryptFile requires a File object.');
+	} else {
+		const content = await encrypt(key, await file.arrayBuffer(), { output: BUFFER });
+
+		return new File([content], `${file.name}${FILE_EXT}`, {
+			type: `${FILE_TYPE_PREFIX}${file.type}`,
+			lastModified: file.lastModified,
+		});
+	}
+}
+
+/**
+ * Decrypts a file encrypted by `encryptFile`.
+ *
+ * @param {CryptoKey} key A cryptographic key for decryption.
+ * @param {File} file The file to decrypt.
+ * @return {Promise<File>} A new File instance with decrypted content, having name and metadata of the original.
+ * @throws {TypeError} If `file` is not a valid File object or `key` is not a valid `CryptoKey`
+ */
+export async function decryptFile(key, file) {
+	if (! (file instanceof File)) {
+		throw new TypeError('decryptFile requires a File object.');
+	} else {
+		const decrypted = await decrypt(key, await file.arrayBuffer(), { output: BUFFER });
+
+		return new File([decrypted], file.name.replace(FILE_EXT, ''), {
+			type: file.type.replace(FILE_TYPE_PREFIX, ''),
+			lastModified: file.lastModified,
+		});
+	}
 }
