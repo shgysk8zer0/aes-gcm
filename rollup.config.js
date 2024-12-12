@@ -12,7 +12,6 @@ export default [{
 		format: 'cjs',
 	}, {
 		file: 'aes-gcm.min.js',
-		external,
 		format: 'esm',
 		plugins: [terser()],
 		sourcemap: true,
