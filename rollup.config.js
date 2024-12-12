@@ -1,25 +1,20 @@
 import nodeResolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 
+const external = ['@shgysk8zer0/polyfills'];
+
 export default [{
-	input: 'index.js',
+	input: 'aes-gcm.js',
 	plugins: [nodeResolve()],
+	external,
 	output: [{
-		file: 'index.cjs',
+		file: 'aes-gcm.cjs',
 		format: 'cjs',
 	}, {
-		file: 'index.min.js',
+		file: 'aes-gcm.min.js',
+		external,
 		format: 'iife',
 		plugins: [terser()],
 		sourcemap: true,
-	}, {
-		file: 'index.mjs',
-		format: 'module',
 	}],
-}, {
-	input: 'consts.js',
-	output: {
-		file: 'consts.cjs',
-		format: 'cjs',
-	}
 }];
