@@ -13,7 +13,7 @@ export default [{
 	}, {
 		file: 'aes-gcm.min.js',
 		external,
-		format: 'iife',
+		format: 'esm',
 		plugins: [terser()],
 		sourcemap: true,
 	}],
