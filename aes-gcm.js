@@ -123,6 +123,30 @@ function _safeBufferCompare(a, b) {
 }
 
 /**
+ * Get the correct IV size for a given key's algorithm
+ *
+ * @param {CryptoKey} key The key with which to determine algorithm and therefore IV length
+ * @returns {number} The appropriate IV length for the key's algorithm
+ * @throws {TypeError} If `key` is not a `CryptoKey` or a key with an unsupported algorithm
+ */
+function _getIVLength(key) {
+	if (! (key instanceof CryptoKey)) {
+		throw new TypeError('Key must be a `CryptoKey.');
+	} else {
+		switch(key.algorithm.name) {
+			case AES_GCM:
+				return AES_GCM_LENGTH;
+
+			case AES_CBC:
+				return AES_CBC_LENGTH;
+
+			default:
+				throw new TypeError(`Unsupported key algorithm: ${key.algorithm.name}.`);
+		}
+	}
+}
+
+/**
  * Generate a random IV of the correct length for a key type
  *
  * @param {CryptoKey} key
@@ -130,20 +154,7 @@ function _safeBufferCompare(a, b) {
  * @throws {TypeError} If `key` is not a `CryptoKey` or a key with an unsupported algorithm
  */
 export function generateIV(key) {
-	if (! (key instanceof CryptoKey)) {
-		throw new TypeError('Key must be a `CryptoKey.');
-	} else {
-		switch(key.algorithm.name) {
-			case AES_GCM:
-				return crypto.getRandomValues(new Uint8Array(AES_GCM_LENGTH));
-
-			case AES_CBC:
-				return crypto.getRandomValues(new Uint8Array(AES_CBC_LENGTH));
-
-			default:
-				throw new TypeError(`Unsupported key algorithm: ${key.algorithm.name}.`);
-		}
-	}
+	return crypto.getRandomValues(new Uint8Array(_getIVLength(key)));
 }
 
 /**
@@ -234,17 +245,19 @@ export async function getSecretKey(prop = 'SECRET_KEY') {
  * @param {CryptoKey} key - The CryptoKey used for encryption. Must allow encryption (`usages` includes 'encrypt').
  * @param {string|Blob|ArrayBuffer|ArrayBufferView} thing - The data to be encrypted.
  * @param {object} options - Optional configuration for encryption.
- * @param {Uint8Array} [options.iv=crypto.getRandomValues(new Uint8Array(12))] - Initialization vector (IV) used for encryption. Defaults to a random 12-byte Uint8Array.
+ * @param {Uint8Array} [options.iv] - Initialization vector (IV) used for encryption. If not given, an IV of the correct length for the algorithm will be generated.
  * @param {string} [options.output='ui8'] -  Output format for the encrypted data.
  * @returns {Promise<Uint8Array|string>} - The encrypted data. The exact type depends on the `output` option.
  * @throws {TypeError} - Thrown if the key is invalid, IV is invalid, or the data type is not supported for encryption.
  */
 export async function encrypt(key, thing, {
-	iv = crypto.getRandomValues(new Uint8Array(DEFAULT_IV_LENGTH)),
+	iv,
 	output = DEFAULT_OUTPUT,
 } = {}) {
 	if (! (key instanceof CryptoKey) || ! key.usages.includes('encrypt')) {
 		throw new TypeError('Invalid key.');
+	} else if (typeof iv === 'undefined') {
+		return await encrypt(key, thing, { iv: generateIV(key), output });
 	} else if (! (iv instanceof Uint8Array)) {
 		throw new TypeError('Invalid IV.');
 	} else if (typeof thing === 'string') {
@@ -285,9 +298,10 @@ export async function decrypt(key, thing, {
 	} else if (thing instanceof Blob) {
 		return await decrypt(key, await thing.arrayBuffer(), { output });
 	} else if (thing instanceof ArrayBuffer || ArrayBuffer.isView(thing)) {
-		const iv = thing.slice(0, 12);
-		const payload = thing.slice(12);
-		const result = await crypto.subtle.decrypt({ name: key.algorithm.name, iv }, key, payload);
+		const ivLength = _getIVLength(key);
+		const iv = thing.slice(0, ivLength);
+		const payload = thing.slice(ivLength);
+		const result = await crypto.subtle.decrypt({ ...key.algorithm, iv }, key, payload);
 
 		return output === BUFFER ? result : _encode(new Uint8Array(result), output);
 	} else {
@@ -329,22 +343,18 @@ export async function hash(thing, {
  * @param {string|Blob|ArrayBuffer|ArrayBufferView} thing - The data to be signed.
  * @param {object} options - Optional configuration for signing.
  * @param {string} [options.algo='SHA-256'] - The hashing algorithm to use.
- * @param {Uint8Array} [options.iv=crypto.getRandomValues(new Uint8Array(12))] - Initialization vector (IV) used for encryption. Defaults to a random 12-byte Uint8Array.
+ * @param {Uint8Array} [options.iv] - Initialization vector (IV) used for encryption.
  * @param {string} [options.output='ui8'] - Output format for the signed data.
  * @returns {Promise<ArrayBuffer|Uint8Array|string>} - The signature for data. The exact type depends on the `output` option.
  * @throws {TypeError} - Thrown if the key is invalid, the hashing algorithm is unsupported, or the output format is invalid.
  */
 export async function sign(key, thing, {
 	algo = DEFAULT_ALGO,
-	iv = crypto.getRandomValues(new Uint8Array(DEFAULT_IV_LENGTH)),
+	iv,
 	output = DEFAULT_OUTPUT,
 } = {}) {
-	if (typeof iv === 'undefined') {
-		return await sign(key, thing, { algo, iv: crypto.getRandomValues(new Uint8Array(key.algorithm.length)), output });
-	} else {
-		const hashed = await hash(thing, { algo, output: BUFFER });
-		return await encrypt(key, hashed, { iv, output });
-	}
+	const hashed = await hash(thing, { algo, output: BUFFER });
+	return await encrypt(key, hashed, { iv, output });
 }
 
 /**
