@@ -5,8 +5,9 @@ import { readFile } from 'node:fs/promises';
 import { setMaxListeners } from 'node:events';
 import {
 	generateSecretKey, encrypt, decrypt, sign, verifySignature, hash, verify, getSecretKey, HEX, TEXT, BASE64, SHA512,
-	createSecretKeyFromPassword, encryptFile, decryptFile, wrapKey, generateWrappingKey,
-	unwrapKey, createWrappingKeyFromPassword, WRAP_USAGES, ENCRYPT_USAGES,
+	createSecretKeyFromPassword, encryptFile, decryptFile, wrapKey, generateWrappingKey, unwrapKey,
+	createWrappingKeyFromPassword, WRAP_USAGES, ENCRYPT_USAGES, wrapAndEncodeKey, unwrapAndDecodeKey, generateIV,
+	AES_GCM_LENGTH, AES_CBC, AES_CBC_LENGTH, DEFAULT_ALGO_NAME,
 } from '@shgysk8zer0/aes-gcm';
 
 describe('Test encryption and decryption', async () => {
@@ -20,16 +21,35 @@ describe('Test encryption and decryption', async () => {
 
 	test('Secret keys should be able to be import from `process.env`', { signal }, async () => {
 		const key = await getSecretKey();
-
 		assert.ok(key instanceof CryptoKey, 'Should be able to import keys from environment variables.');
 		assert.deepStrictEqual(key.usages, ENCRYPT_USAGES, 'Generated secret key should have encrpytion usages.');
+		assert.strictEqual(key.algorithm.name, DEFAULT_ALGO_NAME, `Default key should use the ${DEFAULT_ALGO_NAME} algorithms.`);
+	});
+
+	test('Try generating an AES-CBC key', { signal }, async () => {
+		const key = await generateSecretKey({ name: AES_CBC });
+		assert.ok(key instanceof CryptoKey, 'Should successfully generate a secret key.');
+		assert.strictEqual(key.algorithm.name, AES_CBC, 'Should generate an AES-CBC key.');
+		assert.deepStrictEqual(key.usages, ENCRYPT_USAGES, 'Generated AES-CBC key should have encryption key usages.');
+
+		const iv = generateIV(key);
+		assert.strictEqual(iv.length, AES_CBC_LENGTH, `IV length for AES-CBC encrytption should be ${AES_CBC_LENGTH}.`);
+
+		const encrypted = await encrypt(key, input, { iv });
+		const decrypted = await decrypt(key, encrypted, { output: TEXT });
+		assert.strictEqual(decrypted, input, 'AES-CBC encrpytion shoould decrypt successfully.');
+	});
+
+	test('Generating IV should result in correct length.', { signal }, () => {
+		const iv = generateIV(key);
+		assert.ok(iv instanceof Uint8Array, 'Generating IV should result in a `Uint8Array`.');
+		assert.strictEqual(iv.length, AES_GCM_LENGTH, `IV generated for ${key.algorithm.name} should be ${AES_GCM_LENGTH}.`);
 	});
 
 	test('Check password-based encryption & decryption', { signal }, async () => {
 		const key = await createSecretKeyFromPassword(crypto.randomUUID());
 		const encrypted = await encrypt(key, input);
 		const decrypted = await decrypt(key, encrypted, { output: TEXT });
-
 		assert.ok(encrypted instanceof Uint8Array, 'Password encrypted content should default to an Uint8Arrray.');
 		assert.strictEqual(input, decrypted, 'Password-based decrpyption should return initial input.');
 		assert.rejects(decrypt(await createSecretKeyFromPassword('invalid-pass'), encrypted), 'Invalid password should throw/reject when decrypting.');
@@ -38,7 +58,7 @@ describe('Test encryption and decryption', async () => {
 	test('Successfully generate secret keys', { signal }, async () => {
 		const key = await generateSecretKey();
 		assert.ok(key instanceof CryptoKey, '`generateSecretKey() should return `Promise<CryptoKey>`.');
-		assert.rejects(() => generateSecretKey({ length: 1 }), 'Generating keys of invalid length should throw/reject.');
+		assert.rejects(generateSecretKey({ length: 1 }), 'Generating keys of invalid length should throw/reject.');
 	});
 
 	test('Unwraped keys should decrypt data encrypted by the original.', { signal }, async () => {
@@ -59,9 +79,18 @@ describe('Test encryption and decryption', async () => {
 
 	test('Create wrapping key from password.', { signal }, async () => {
 		const kek = await createWrappingKeyFromPassword('Super secret password');
-
 		assert.ok(kek instanceof CryptoKey, 'Generated key should be a `CryptoKey`');
 		assert.deepStrictEqual(kek.usages, WRAP_USAGES, 'Wrapping key should have wrapping usages.');
+
+		const wrapped = await wrapAndEncodeKey(kek, key);
+		const unwrapped = await unwrapAndDecodeKey(kek, wrapped);
+		assert.ok(unwrapped instanceof CryptoKey, 'Unwrapped and decoded key should be a `CryptoKey`.');
+		assert.deepStrictEqual(unwrapped.usages, key.usages, 'Unwrapped key should have the same key usages.');
+		assert.deepStrictEqual(unwrapped.algorithm, key.algorithm, 'Unwrapped key should have the same key usages.');
+
+		const encrypted = await encrypt(key, input);
+		const decrypted = await decrypt(unwrapped, encrypted, { output: TEXT });
+		assert.strictEqual(decrypted, input, 'Unwrapped key should decrypt data correctly.');
 	});
 
 	test('Decryption yields the same as what was encrypted', { signal }, async () => {
@@ -69,10 +98,10 @@ describe('Test encryption and decryption', async () => {
 		const decrypted = await decrypt(key, encrypted, { output: TEXT});
 
 		assert.strictEqual(decrypted, input, 'Decrypted results should be the same as input.');
-		assert.rejects(() => encrypt(key, { foo: 'bar' }), 'Encrypting invalid types should throw/reject.');
+		assert.rejects(encrypt(key, { foo: 'bar' }), 'Encrypting invalid types should throw/reject.');
 		assert.rejects(async () => decrypt(await generateSecretKey(), encrypted), 'Decrpyting with wrong key should throw/reject.');
-		assert.rejects(() => decrypt(key, crypto.getRandomValues(new Uint8Array(32))), 'Decrpyting invalid data should throw/reject.');
-		assert.rejects(() => decrypt(key, { foo: 'bar' }), 'Decrypting invalid types should throw/reject.');
+		assert.rejects(decrypt(key, crypto.getRandomValues(new Uint8Array(32))), 'Decrpyting invalid data should throw/reject.');
+		assert.rejects(decrypt(key, { foo: 'bar' }), 'Decrypting invalid types should throw/reject.');
 	});
 
 	test('Check file encryption & decryption', { signal }, async () => {
@@ -92,13 +121,13 @@ describe('Test encryption and decryption', async () => {
 	test('Check encryption of large files', { signal }, async () => {
 		const buffer = await readFile('package-lock.json');
 		const file = new File([buffer], 'package-lock.json', { type: 'application/json' });
+
 		assert.doesNotReject(encryptFile(key, file));
 	});
 
 	test('Encryption works with encoded strings', ({ signal }), async () => {
 		const encrypted = await encrypt(key, input, { output: BASE64 });
 		const decrypted = await decrypt(key, encrypted, { input: BASE64, output: TEXT });
-
 		assert.strictEqual(decrypted, input, 'Text encryption/decryption should work with strings and base64 encoding.');
 	});
 
@@ -112,13 +141,11 @@ describe('Test encryption and decryption', async () => {
 
 	test('Verify encrypted signatures', { signal }, async () => {
 		const signature = await sign(key, input);
-
 		assert.ok(await verifySignature(key, input, signature), 'Signature should match.');
 	});
 
 	test('Verify encrypted signatures (text version)', { signal }, async () => {
 		const signature = await sign(key, input, { output: HEX });
-
 		assert.ok(await verifySignature(key, input, signature, { input: HEX }), 'Signature should match via text.');
 	});
 });
