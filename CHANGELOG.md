@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.0.3] - 2024-12-16
+
+### Added
+- Added key wrapping/unwrapping via `AES-KW` key support
+- Added `generateIV` to generate an appropriate random IV for a given key/algorithm
+
+### Changed
+- Minor refactor to reuse encoding/decoding via `_encode()` and `_decode()`
+
 ## [v1.0.2] - 2024-12-12
 
 ### Added
