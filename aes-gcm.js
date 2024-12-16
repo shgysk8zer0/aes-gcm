@@ -2,13 +2,17 @@ const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
 // Cryptographic Algorithm constants
-export const IV_LENGTH = 12;
 export const AES_CTR = 'AES-CTR';
 export const AES_GCM = 'AES-GCM';
 export const AES_CBC = 'AES-CBC';
+export const AES_KW = 'AES-KW';
+export const AES_GCM_LENGTH = 12;
+export const AES_CBC_LENGTH = 16;
 export const DEFAULT_ALGO_NAME = AES_GCM;
-export const DEFAULT_LENGTH = 256;
-export const KEY_OPS = ['encrypt', 'decrypt'];
+export const DEFAULT_IV_LENGTH = AES_GCM_LENGTH;
+export const DEFAULT_KEY_LENGTH = 256;
+export const ENCRYPT_USAGES = ['encrypt', 'decrypt'];
+export const WRAP_USAGES = ['wrapKey', 'unwrapKey'];
 
 // Hashing Algorithms
 export const SHA256 = 'SHA-256';
@@ -30,6 +34,68 @@ export const FILE_EXT = '.aes-enc';
 export const FILE_TYPE_PREFIX = 'application/aes-encrypted+';
 
 /**
+ * Encode `Uint8Array` bytes into various formats
+ *
+ * @param {Uint8Array} bytes The bytes as a `Uint8Array`
+ * @param {string} encoding The output encoding format
+ * @returns {ArrayBuffer|Uint8Array|string} The bytes encoded in the specified way
+ */
+function _encode(bytes, encoding) {
+	if (bytes instanceof ArrayBuffer) {
+		return _encode(new Uint8Array(bytes), encoding);
+	} else {
+		switch(encoding) {
+			case BUFFER:
+				return bytes.buffer;
+
+			case UI8_ARR:
+				return bytes;
+
+			case HEX:
+				return bytes.toHex();
+
+			case BASE64:
+				return bytes.toBase64({ alphabet: BASE64 });
+
+			case BASE64_URL:
+				return bytes.toBase64({ alphabet: BASE64_URL });
+
+			case TEXT:
+				return decoder.decode(bytes);
+
+			default:
+				throw new TypeError(`Invalid output: ${encoding}.`);
+		}
+	}
+}
+
+/**
+ * Decode a string into a `Uint8Array` with various input formats supported
+ *
+ * @param {string} str The string to decode.
+ * @param {string} encoding The encoding for the string (eg hex, base64)
+ * @returns {Uint8Array} The string decoded into a `Uint8Array`
+ */
+function _decode(str, encoding) {
+	switch (encoding) {
+		case HEX:
+			return Uint8Array.fromHex(str);
+
+		case BASE64:
+			return Uint8Array.fromBase64(str, { alphabet: BASE64 });
+
+		case BASE64_URL:
+			return Uint8Array.fromBase64(str, { alphabet: BASE64_URL });
+
+		case TEXT:
+			return encoder.encode(str);
+
+		default:
+			throw new TypeError(`Unspupported input format: ${encoding}.`);
+	}
+}
+
+/**
  * Constant-time comparison of two ArrayBuffers
  *
  * @param {ArrayBuffer} a - First buffer to compare
@@ -37,15 +103,12 @@ export const FILE_TYPE_PREFIX = 'application/aes-encrypted+';
  * @returns {boolean} - Whether the buffers are equal
  */
 function _safeBufferCompare(a, b) {
-	// Convert to Uint8Array for comparison
 	const bufA = new Uint8Array(a);
 	const bufB = new Uint8Array(b);
 
-	// Ensure we always compare the full lengths
 	const maxLength = Math.max(bufA.length, bufB.length);
 	let diff = bufA.length !== bufB.length ? 1 : 0;
 
-	// Compare bytes, padding shorter buffer with zeros
 	for (let i = 0; i < maxLength; i++) {
 		// Use 0 for out-of-bounds indices
 		const byteA = i < bufA.length ? bufA[i] : 0;
@@ -60,40 +123,95 @@ function _safeBufferCompare(a, b) {
 }
 
 /**
- * Generates a new AES-GCM secret key.
+ * Generate a random IV of the correct length for a key type
  *
- * @param {object} options
- * @param {number} [options.length=256] The desired key length in bits.
- * @param {boolean} [options.extractable=true] Whether the key should be extractable for use outside the current context.
- * @returns {Promise<CryptoKey>} The newly generated secret key.
+ * @param {CryptoKey} key
+ * @returns {Uint8Array} A random IV (`Uinit8Array`) of the correct length for the alogorithm
+ * @throws {TypeError} If `key` is not a `CryptoKey` or a key with an unsupported algorithm
  */
-export async function generateSecretKey({
-	length = DEFAULT_LENGTH,
-	extractable = true,
-} = {}) {
-	return await crypto.subtle.generateKey({ name: AES_GCM, length, }, extractable, KEY_OPS);
+export function generateIV(key) {
+	if (! (key instanceof CryptoKey)) {
+		throw new TypeError('Key must be a `CryptoKey.');
+	} else {
+		switch(key.algorithm.name) {
+			case AES_GCM:
+				return crypto.getRandomValues(new Uint8Array(AES_GCM_LENGTH));
+
+			case AES_CBC:
+				return crypto.getRandomValues(new Uint8Array(AES_CBC_LENGTH));
+
+			default:
+				throw new TypeError(`Unsupported key algorithm: ${key.algorithm.name}.`);
+		}
+	}
 }
 
 /**
- * Creates an ephemeral CryptoKey from a given password using the AES-GCM algorithm.
+ * Generates a new secret key.
+ *
+ * @param {object} options
+ * @param {string} [options.name='AES-GCM'] The name of the algorithms.
+ * @param {number} [options.length=256] The desired key length in bits.
+ * @param {boolean} [options.extractable=true] Whether the key should be extractable for use outside the current context.
+ * @param {string[]} [options.usages=['encrypt', 'decrypt']] Usages for the key, defaulting to encrpyt and decrypt.
+ * @returns {Promise<CryptoKey>} The newly generated secret key.
+ */
+export async function generateSecretKey({
+	name = AES_GCM,
+	length = DEFAULT_KEY_LENGTH,
+	extractable = true,
+	usages = ENCRYPT_USAGES
+} = {}) {
+	return await crypto.subtle.generateKey({ name, length, }, extractable, usages);
+}
+
+/**
+ * Generate an AES-KW key for wrapping/unwrapping other keys.
+ *
+ * @param {object} options
+ * @param {boolean} [options.extractable=true] Whether the key should be extractable for use outside the current context.
+ * @returns {Promise<CryptoKey>} The generated key that can be used to wrap/unwrap other keys.
+ */
+export async function generateWrappingKey({ extractable = true } = {}) {
+	return await generateSecretKey({ name: AES_KW, extractable, usages: WRAP_USAGES });
+}
+
+/**
+ * Creates an ephemeral CryptoKey from a given password using the given algorithm.
  *
  * @param {string} pass The password to use for key derivation.
  * @param {object} options
  * @param {number} [options.length=256] The desired key length in bits.
  * @param {boolean} [options.extractable=false] Whether the key should be extractable from the WebCrypto API.
+ * @param {string[]} [options.keyUsages=['encrypt', 'decrypt']] Usages for the key, defaulting to encrpyt and decrypt.
  * @returns {Promise<CryptoKey>} The generated `CryptoKey`.
  * @throws {TypeError} Thrown if password is not a string, is an empty string, or if the config to generate the key is invalid.
  */
 export async function createSecretKeyFromPassword(pass, {
-	length = DEFAULT_LENGTH,
+	name = AES_GCM,
+	length = DEFAULT_KEY_LENGTH,
 	extractable = false,
+	usages = ENCRYPT_USAGES,
 } = {}) {
 	if (typeof pass !== 'string' || pass.length === 0) {
 		throw new TypeError('Key password must be a non-empty string.');
 	} else {
 		const hash = await crypto.subtle.digest(SHA256, encoder.encode(pass));
-		return await crypto.subtle.importKey('raw', hash, { name: AES_GCM, length }, extractable, KEY_OPS);
+		return await crypto.subtle.importKey('raw', hash, { name, length }, extractable, usages);
 	}
+}
+
+/**
+ * Creates an ephemeral CryptoKey from a given password using the AES-KW algorithm for wrapping/unwrapping other keys.
+ *
+ * @param {string} pass The password to use for key derivation.
+ * @param {object} options
+ * @param {boolean} [options.extractable=false] Whether the key should be extractable from the WebCrypto API.
+ * @returns {Promise<CryptoKey>} The generated wrapping `CryptoKey`.
+ * @throws {TypeError} Thrown if password is not a string, is an empty string, or if the config to generate the key is invalid.
+ */
+export async function createWrappingKeyFromPassword(pass, { extractable = false } = {}) {
+	return await createSecretKeyFromPassword(pass, { name: AES_KW, extractable, usages: WRAP_USAGES });
 }
 
 /**
@@ -122,7 +240,7 @@ export async function getSecretKey(prop = 'SECRET_KEY') {
  * @throws {TypeError} - Thrown if the key is invalid, IV is invalid, or the data type is not supported for encryption.
  */
 export async function encrypt(key, thing, {
-	iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH)),
+	iv = crypto.getRandomValues(new Uint8Array(DEFAULT_IV_LENGTH)),
 	output = DEFAULT_OUTPUT,
 } = {}) {
 	if (! (key instanceof CryptoKey) || ! key.usages.includes('encrypt')) {
@@ -139,28 +257,7 @@ export async function encrypt(key, thing, {
 		bytes.set(iv, 0);
 		bytes.set(encrypted, iv.length);
 
-		switch(output) {
-			case BUFFER:
-				return bytes.buffer;
-
-			case UI8_ARR:
-				return bytes;
-
-			case HEX:
-				return bytes.toHex();
-
-			case BASE64:
-				return bytes.toBase64({ alphabet: BASE64 });
-
-			case BASE64_URL:
-				return bytes.toBase64({ alphabet: BASE64_URL });
-
-			case TEXT:
-				return decoder.decode(bytes);
-
-			default:
-				throw new TypeError(`Invalid output: ${output}.`);
-		}
+		return _encode(bytes, output);
 	} else {
 		throw new TypeError('Unsupported type/class to encrypt.');
 	}
@@ -184,22 +281,7 @@ export async function decrypt(key, thing, {
 	if (! (key instanceof CryptoKey) || ! key.usages.includes('decrypt')) {
 		throw new TypeError('Invalid key.');
 	} else if (typeof thing === 'string') {
-		switch (input) {
-			case HEX:
-				return await decrypt(key, Uint8Array.fromHex(thing), { output });
-
-			case BASE64:
-				return await decrypt(key, Uint8Array.fromBase64(thing, { alphabet: BASE64 }), { output });
-
-			case BASE64_URL:
-				return await decrypt(key, Uint8Array.fromBase64(thing, { alphabet: BASE64_URL }), { output });
-
-			case TEXT:
-				return await decrypt(key, encoder.encode(thing), { output });
-
-			default:
-				throw new TypeError(`Unspupported input format: ${input}.`);
-		}
+		return _encode(await decrypt(key, _decode(thing, input)), output);
 	} else if (thing instanceof Blob) {
 		return await decrypt(key, await thing.arrayBuffer(), { output });
 	} else if (thing instanceof ArrayBuffer || ArrayBuffer.isView(thing)) {
@@ -207,25 +289,7 @@ export async function decrypt(key, thing, {
 		const payload = thing.slice(12);
 		const result = await crypto.subtle.decrypt({ name: key.algorithm.name, iv }, key, payload);
 
-		switch(output) {
-			case BUFFER:
-				return result;
-
-			case UI8_ARR:
-				return new Uint8Array(result);
-
-			case BASE64:
-				return new Uint8Array(result).toBase64({ alphabet: BASE64 });
-
-			case BASE64_URL:
-				return new Uint8Array(result).toBase64({ alphabet: BASE64_URL });
-
-			case TEXT:
-				return decoder.decode(result);
-
-			default:
-				throw new TypeError(`Invalid output type: ${output}.`);
-		}
+		return output === BUFFER ? result : _encode(new Uint8Array(result), output);
 	} else {
 		throw new TypeError('Unsupported type/class to decrypt.');
 	}
@@ -252,29 +316,7 @@ export async function hash(thing, {
 	} else if (thing instanceof ArrayBuffer || ArrayBuffer.isView(thing)) {
 		const result = await crypto.subtle.digest(algo, thing);
 
-		switch(output) {
-			case BUFFER:
-				return result;
-
-			case UI8_ARR:
-				return new Uint8Array(result);
-
-			case HEX:
-				return new Uint8Array(result).toHex();
-
-			case BASE64:
-				return new Uint8Array(result).toBase64({ alphabet: BASE64 });
-
-			case BASE64_URL:
-				return new Uint8Array(result).toBase64({ alphabet: BASE64_URL });
-
-			case TEXT:
-				return decoder.decode(result);
-
-			default:
-				throw new TypeError(`Invalid output: ${output}.`);
-		}
-
+		return output === BUFFER ? result : _encode(new Uint8Array(result), output);
 	} else {
 		throw new TypeError('Unsupported type/class to hash.');
 	}
@@ -294,11 +336,15 @@ export async function hash(thing, {
  */
 export async function sign(key, thing, {
 	algo = DEFAULT_ALGO,
-	iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH)),
+	iv = crypto.getRandomValues(new Uint8Array(DEFAULT_IV_LENGTH)),
 	output = DEFAULT_OUTPUT,
 } = {}) {
-	const hashed = await hash(thing, { algo, output: BUFFER });
-	return await encrypt(key, hashed, { iv, output });
+	if (typeof iv === 'undefined') {
+		return await sign(key, thing, { algo, iv: crypto.getRandomValues(new Uint8Array(key.algorithm.length)), output });
+	} else {
+		const hashed = await hash(thing, { algo, output: BUFFER });
+		return await encrypt(key, hashed, { iv, output });
+	}
 }
 
 /**
@@ -317,22 +363,7 @@ export async function verify(thing, expected, {
 	input = HEX,
 } = {}) {
 	if (typeof expected === 'string') {
-		switch(input) {
-			case HEX:
-				return await verify(thing, Uint8Array.fromHex(expected).buffer, { algo });
-
-			case BASE64:
-				return await verify(thing, Uint8Array.fromBase64(expected, { alphabet: BASE64 }).buffer, { algo });
-
-			case BASE64_URL:
-				return await verify(thing, Uint8Array.fromBase64(expected, { alphabet: BASE64_URL }).buffer, { algo });
-
-			case TEXT:
-				return await verify(thing, encoder.encode(expected).buffer, { algo });
-
-			default:
-				throw new TypeError(`Invalid input type: ${input}.`);
-		}
+		return await verify(thing, _decode(expected, input).buffer, { algo });
 	} else if (expected instanceof Uint8Array) {
 		return await verify(thing, expected.buffer, { algo });
 	} else {
@@ -357,7 +388,7 @@ export async function verifySignature(key, source, signature, {
 	algo = DEFAULT_ALGO,
 	input = HEX,
 } = {}) {
-	const expected = await decrypt(key, signature, { output: BUFFER, input });
+	const expected = await decrypt(key, signature, { output: UI8_ARR, input });
 	return await verify(source, expected, { algo, input: BUFFER });
 }
 
@@ -400,5 +431,125 @@ export async function decryptFile(key, file) {
 			type: file.type.replace(FILE_TYPE_PREFIX, ''),
 			lastModified: file.lastModified,
 		});
+	}
+}
+
+/**
+ * Wraps a cryptographic key using a wrapping key.
+ *
+ * @param {CryptoKey} wrappingKey - The key to use for wrapping.
+ * @param {CryptoKey} key - The key to be wrapped.
+ * @param {object} [options] - Optional options for wrapping.
+ * @param {string} [options.format='jwk'] - The format of the wrapped key.
+ * @param {object} [options.wrapAlgo={name:'AES-KW'}] - The wrapping algorithm to use.
+ * @returns {Promise<ArrayBuffer|Uint8Array|string>} - The wrapped key in the specified output format.
+ */
+export async function wrapKey(wrappingKey, key, {
+	format = 'jwk',
+	wrapAlgo = { name: AES_KW },
+	output = BUFFER,
+} = {}) {
+	const result = await crypto.subtle.wrapKey(format, key, wrappingKey, wrapAlgo);
+
+	return output !== BUFFER ? _encode(result, output) : result;
+}
+
+/**
+ * Wraps a cryptographic key using a wrapping key, returning an encoded format for later unwrappeing.
+ *
+ * @param {CryptoKey} wrappingKey - The key to use for wrapping.
+ * @param {CryptoKey} key - The key to be wrapped.
+ * @param {object} [options] - Optional options for wrapping.
+ * @param {string} [options.format='jwk'] - The format of the wrapped key.
+ * @param {object} [options.wrapAlgo={name:'AES-KW'}] - The wrapping algorithm to use.
+ * @param {string} [options.output='base64'] The output format for the wrapped key.
+ * @returns {Promise<ArrayBuffer|Uint8Array|string>} - The wrapped key in the specified output format, along with key data.
+ */
+export async function wrapAndEncodeKey(wrappingKey, key, {
+	format = 'jwk',
+	wrapAlgo = { name: AES_KW },
+	output = BASE64,
+} = {}) {
+	const wrapped = await wrapKey(wrappingKey, key, { format, wrapAlgo, output: UI8_ARR });
+	const header = encoder.encode(JSON.stringify({ format, wrapAlgo, usages: key.usages, keyAlgo: key.algorithm }));
+	const bytes = new Uint8Array(wrapped.length + header.length + 1);
+
+	// Store the header length in the first byte so it can be used for decoding later
+	bytes.set([header.length], 0, 1);
+	// Next, store the JSON encoded header data
+	bytes.set(header, 1, header.length + 1);
+	// The rest of the bytes are all key data
+	bytes.set(wrapped, header.length + 1);
+
+	switch(output) {
+		case UI8_ARR:
+			return bytes;
+
+		case BUFFER:
+			return bytes.buffer;
+
+		default:
+			return _encode(bytes, output);
+	}
+}
+
+/**
+ * Unwraps a cryptographic key using an unwrapping key.
+ *
+ * @param {CryptoKey} unwrappingKey - The key to use for unwrapping.
+ * @param {ArrayBufferView|string} wrappedKey - The wrapped key to be unwrapped.
+ * @param {object} [options] - Optional options for unwrapping.
+ * @param {string} [options.format='jwk'] - The format of the wrapped key.
+ * @param {object} [options.unwrapAlgo={name:'AES-KW'}] - The unwrapping algorithm to use.
+ * @param {object} [options.unwrappedKeyAlgo={name:AES_GCM}] - The algorithm of the unwrapped key.
+ * @param {boolean} [options.extractable=true] - Whether the unwrapped key is extractable.
+ * @param {string[]} [options.usages=KEY_OPS] - The key usages of the unwrapped key.
+ * @param {string} [options.input=BASE64] - The input format of the wrapped key.
+ * @returns {Promise<CryptoKey>} - The unwrapped key.
+ */
+export async function unwrapKey(unwrappingKey, wrappedKey, {
+	format = 'jwk',
+	unwrapAlgo = { name: 'AES-KW' },
+	unwrappedKeyAlgo = { name: AES_GCM },
+	extractable = true,
+	usages = ENCRYPT_USAGES,
+	input = BASE64,
+} = {}) {
+	if (typeof wrappedKey === 'string') {
+		return await unwrapKey(unwrappingKey, _encode(wrappedKey, input).buffer, { format, unwrapAlgo, unwrappedKeyAlgo, extractable, usages });
+	} else if (wrappedKey instanceof ArrayBuffer || ArrayBuffer.isView(wrappedKey)) {
+		return await crypto.subtle.unwrapKey(format, wrappedKey, unwrappingKey, unwrapAlgo, unwrappedKeyAlgo, extractable, usages);
+	} else {
+		throw new TypeError('Invalid wrapped key data.');
+	}
+}
+
+/**
+ * Unwraps and decodes a cryptographic key.
+
+ * @param {CryptoKey} key - The key to use for unwrapping.
+ * @param {string|ArrayBuffer|Uint8Array} wrappedKeyData - The wrapped key data to be unwrapped and decoded.
+ * @param {object} [options] - Optional options for unwrapping and decoding.
+ * @param {string} [options.input='base64'] - The input format of the wrapped key data.
+ * @param {boolean} [options.extractable=true] - Whether the unwrapped key is extractable.
+ * @returns {Promise<CryptoKey>} - The unwrapped and decoded key.
+ */
+export async function unwrapAndDecodeKey(key, wrappedKeyData, {
+	input = BASE64,
+	extractable = true,
+} = {}) {
+	if (typeof wrappedKeyData === 'string') {
+		return await unwrapAndDecodeKey(key, _decode(wrappedKeyData, input), { extractable });
+	} else if (wrappedKeyData instanceof ArrayBuffer) {
+		return await unwrapAndDecodeKey(key, new Uint8Array(wrappedKeyData), { extractable });
+	} else if (wrappedKeyData instanceof Uint8Array) {
+		const length = wrappedKeyData[0];
+		const { format, wrapAlgo, usages, keyAlgo } = JSON.parse(decoder.decode(wrappedKeyData.slice(1, length + 1)));
+		const keyData = wrappedKeyData.slice(length + 1);
+		const unwrappedKey = await unwrapKey(key, keyData, { format, unwrapAlgo: wrapAlgo, unwrappedKeyAlgo: keyAlgo, usages, extractable });
+
+		return unwrappedKey;
+	} else {
+		throw new TypeError('Wrapped key data must be an encoded string, a `Uint8Array`, or an `ArrayBuffer`.');
 	}
 }
