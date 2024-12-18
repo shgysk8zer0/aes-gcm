@@ -33,7 +33,7 @@ export const TEXT = 'text';
 export const DEFAULT_OUTPUT = UI8_ARR;
 
 // File-related constants
-export const FILE_EXT = '.aes-enc';
+export const FILE_EXT = '.enc';
 export const FILE_TYPE_PREFIX = 'application/aes-encrypted+';
 
 /**
@@ -429,15 +429,28 @@ export async function verifySignature(key, source, signature, {
  * @returns {Promise<File>} A new File instance with encrypted content.
  * @throws {TypeError} If `file` is not a valid File object or `key` is not a valid `CryptoKey`
  */
-export async function encryptFile(key, file) {
+export async function encryptFile(key, file, name = Date.now().toString(36) + FILE_EXT) {
 	if (! (file instanceof File)) {
 		throw new TypeError('encryptFile requires a File object.');
 	} else {
-		const content = await encrypt(key, await file.arrayBuffer(), { output: BUFFER });
+		const fileContent = await file.bytes();
+		const headerContent = encoder.encode(`${key.algorithm.name.toLowerCase()}-${key.algorithm.length}`);
+		const fileHeader = encoder.encode(`${file.name},${file.type},${file.lastModified.toString()}`);
+		const header = new Uint8Array(headerContent.length + 1);
+		header.set([header.length], 0);
+		header.set(headerContent, 1);
+		const fileData = new Uint8Array(fileHeader.length + fileContent.length + 1);
+		fileData.set([fileHeader.length], 0);
+		fileData.set(fileHeader, 1);
+		fileData.set(fileContent, fileHeader.length + 1);
+		const encrypted = await encrypt(key, fileData, { output: UI8_ARR });
+		const result = new Uint8Array(encrypted.length + header.length + 1);
+		result.set([header.length], 0);
+		result.set(header, 1);
+		result.set(encrypted, header.length + 1);
 
-		return new File([content], `${file.name}${FILE_EXT}`, {
-			type: `${FILE_TYPE_PREFIX}${file.type}`,
-			lastModified: file.lastModified,
+		return new File([result], name ?? `${file.name}${FILE_EXT}`, {
+			type: `application/x-${key.algorithm.name.toLowerCase()}-${key.algorithm.length}+encrypted`
 		});
 	}
 }
@@ -454,12 +467,16 @@ export async function decryptFile(key, file) {
 	if (! (file instanceof File)) {
 		throw new TypeError('decryptFile requires a File object.');
 	} else {
-		const decrypted = await decrypt(key, await file.arrayBuffer(), { output: BUFFER });
+		const bytes = await file.bytes();
+		const headerLength = bytes[0];
+		const encrypted = bytes.subarray(headerLength + 1);
+		const decryptedBytes = await decrypt(key, encrypted, { output: UI8_ARR });
+		const decryptedHeaderLength = decryptedBytes[0];
+		const decryptedHeader = decoder.decode(decryptedBytes.subarray(1, decryptedHeaderLength + 1));
+		const decryptedContent = decryptedBytes.subarray(decryptedHeaderLength + 1);
+		const [name, type, lastModified] = decryptedHeader.split(',');
 
-		return new File([decrypted], file.name.replace(FILE_EXT, ''), {
-			type: file.type.replace(FILE_TYPE_PREFIX, ''),
-			lastModified: file.lastModified,
-		});
+		return new File([decryptedContent], name, { type, lastModified: parseInt(lastModified) });
 	}
 }
 

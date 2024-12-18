@@ -106,7 +106,7 @@ describe('Test encryption and decryption', async () => {
 	});
 
 	test('Check file encryption & decryption', { signal }, async () => {
-		const file = new File([input], 'hi.txt', { type: 'text/plain' });
+		const file = new File([input], 'hi.txt', { type: 'text/plain', lastModified: 1734558957856 });
 		const encrypted = await encryptFile(key, file);
 		const decrypted = await decryptFile(key, encrypted);
 
@@ -115,7 +115,7 @@ describe('Test encryption and decryption', async () => {
 		assert.strictEqual(file.name, decrypted.name, 'Decrypted file should have the same filename');
 		assert.strictEqual(file.type, decrypted.type, 'Decrypted file should have the same mime-type');
 		assert.strictEqual(file.size, decrypted.size, 'Decrypted file should have the same size');
-		assert.strictEqual(file.lastModified, decrypted.lastModified, 'Decrypted file should have the same last modification date.');
+		assert.strictEqual(decrypted.lastModified, file.lastModified, 'Decrypted file should have the same last modification date.');
 		assert.strictEqual(input, await decrypted.text(), 'File should decrpyt to have the exact same content.');
 	});
 
