@@ -79,11 +79,12 @@ describe('Test encryption and decryption', async () => {
 
 	test('Create wrapping key from password.', { signal }, async () => {
 		const kek = await createWrappingKeyFromPassword('Super secret password');
+		const key = await createSecretKeyFromPassword('Another Secret Password adaf', { extractable: true });
 		assert.ok(kek instanceof CryptoKey, 'Generated key should be a `CryptoKey`');
 		assert.deepStrictEqual(kek.usages, WRAP_USAGES, 'Wrapping key should have wrapping usages.');
 
-		const wrapped = await wrapAndEncodeKey(kek, key);
-		const unwrapped = await unwrapAndDecodeKey(kek, wrapped);
+		const wrapped = await wrapAndEncodeKey(kek, key).catch(console.error);
+		const unwrapped = await unwrapAndDecodeKey(kek, wrapped).catch(console.error);
 		assert.ok(unwrapped instanceof CryptoKey, 'Unwrapped and decoded key should be a `CryptoKey`.');
 		assert.deepStrictEqual(unwrapped.usages, key.usages, 'Unwrapped key should have the same key usages.');
 		assert.deepStrictEqual(unwrapped.algorithm, key.algorithm, 'Unwrapped key should have the same key usages.');

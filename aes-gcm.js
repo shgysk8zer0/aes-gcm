@@ -11,8 +11,11 @@ export const AES_CBC_LENGTH = 16;
 export const DEFAULT_ALGO_NAME = AES_GCM;
 export const DEFAULT_IV_LENGTH = AES_GCM_LENGTH;
 export const DEFAULT_KEY_LENGTH = 256;
+export const DERIVE_KEY = 'deriveKey';
+export const DERIVE_BITS = 'deriveBits';
 export const ENCRYPT_USAGES = ['encrypt', 'decrypt'];
 export const WRAP_USAGES = ['wrapKey', 'unwrapKey'];
+export const DERIVE_USAGES = [DERIVE_KEY, DERIVE_BITS];
 
 // Hashing Algorithms
 export const SHA256 = 'SHA-256';
@@ -188,27 +191,43 @@ export async function generateWrappingKey({ extractable = true } = {}) {
 }
 
 /**
- * Creates an ephemeral CryptoKey from a given password using the given algorithm.
+ * Creates an ephemeral CryptoKey from a given password using the specified algorithm.
  *
- * @param {string} pass The password to use for key derivation.
- * @param {object} options
+ * @param {string} password The password to use for key derivation.
+ * @param {Object} [options] Optional configuration options.
+ * @param {string} [options.name='AES-GCM'] The name of the key algorithm (e.g., 'AES-GCM').
  * @param {number} [options.length=256] The desired key length in bits.
- * @param {boolean} [options.extractable=false] Whether the key should be extractable from the WebCrypto API.
- * @param {string[]} [options.keyUsages=['encrypt', 'decrypt']] Usages for the key, defaulting to encrpyt and decrypt.
- * @returns {Promise<CryptoKey>} The generated `CryptoKey`.
- * @throws {TypeError} Thrown if password is not a string, is an empty string, or if the config to generate the key is invalid.
+ * @param {string} [options.hash='SHA-256'] The hash algorithm to use for PBKDF2.
+ * @param {number} [options.iterations=100000] The number of iterations for PBKDF2.
+ * @param {boolean} [options.extractable=false] Whether the key can be extracted from the WebCrypto API.
+ * @param {string[]} [options.usages=['encrypt','decrypt']] The intended usages for the key.
+ * @param {ArrayBuffer|Uint8Array|string} [options.salt] Optional salt for deriving the key. If not given, the hash of the password will be used instead.
+ * @returns {Promise<CryptoKey>} The generated CryptoKey.
+ * @throws {TypeError} Thrown if the `password` is not a non-empty string or if the configuration options are invalid.
  */
 export async function createSecretKeyFromPassword(pass, {
 	name = AES_GCM,
 	length = DEFAULT_KEY_LENGTH,
+	hash: hashAlgo = SHA256,
+	iterations = 100_000,
 	extractable = false,
 	usages = ENCRYPT_USAGES,
+	salt,
 } = {}) {
 	if (typeof pass !== 'string' || pass.length === 0) {
 		throw new TypeError('Key password must be a non-empty string.');
+	} else if (typeof salt === 'string') {
+		return await createWrappingKeyFromPassword(pass, { name, length, hash, iterations, extractable, usages, salt: Uint8Array.fromBase64(salt) });
+	} else if (! (salt instanceof ArrayBuffer || ArrayBuffer.isView(salt))) {
+		return await createSecretKeyFromPassword(pass, {
+			name, length, hash: hashAlgo, iterations, extractable, usages,
+			salt: await hash(encoder.encode(`${name}:${hashAlgo}:${pass}`), SHA256)
+		});
 	} else {
-		const hash = await crypto.subtle.digest(SHA256, encoder.encode(pass));
-		return await crypto.subtle.importKey('raw', hash, { name, length }, extractable, usages);
+		const encodedPass = encoder.encode(pass);
+		const pbk = await crypto.subtle.importKey('raw', encodedPass, { name: 'PBKDF2' }, false, [DERIVE_KEY]);
+
+		return await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations, hash: hashAlgo }, pbk, { name, length }, extractable, usages);
 	}
 }
 
@@ -471,17 +490,15 @@ export async function wrapKey(wrappingKey, key, {
  * @param {CryptoKey} key - The key to be wrapped.
  * @param {object} [options] - Optional options for wrapping.
  * @param {string} [options.format='jwk'] - The format of the wrapped key.
- * @param {object} [options.wrapAlgo={name:'AES-KW'}] - The wrapping algorithm to use.
  * @param {string} [options.output='base64'] The output format for the wrapped key.
  * @returns {Promise<ArrayBuffer|Uint8Array|string>} - The wrapped key in the specified output format, along with key data.
  */
 export async function wrapAndEncodeKey(wrappingKey, key, {
 	format = 'jwk',
-	wrapAlgo = { name: AES_KW },
 	output = BASE64,
 } = {}) {
-	const wrapped = await wrapKey(wrappingKey, key, { format, wrapAlgo, output: UI8_ARR });
-	const header = encoder.encode(JSON.stringify({ format, wrapAlgo, usages: key.usages, keyAlgo: key.algorithm }));
+	const wrapped = await wrapKey(wrappingKey, key, { format, wrapAlgo: wrappingKey.algorithm, output: UI8_ARR });
+	const header = encoder.encode(JSON.stringify({ format, wrapAlgo: wrapKey.algorithm, usages: key.usages, keyAlgo: key.algorithm }));
 	const bytes = new Uint8Array(wrapped.length + header.length + 1);
 
 	// Store the header length in the first byte so it can be used for decoding later
