@@ -200,8 +200,8 @@ export async function generateWrappingKey({ extractable = true } = {}) {
  * @param {string} [options.hash='SHA-256'] The hash algorithm to use for PBKDF2.
  * @param {number} [options.iterations=100000] The number of iterations for PBKDF2.
  * @param {boolean} [options.extractable=false] Whether the key can be extracted from the WebCrypto API.
- * @param {string[]} [options.usages=['encrypt', 'decrypt']] The intended usages for the key.
- * @param {ArrayBuffer} [options.salt] Optional salt for deriving the key. If not given, the hash of the password will be used instead.
+ * @param {string[]} [options.usages=['encrypt','decrypt']] The intended usages for the key.
+ * @param {ArrayBuffer|Uint8Array|string} [options.salt] Optional salt for deriving the key. If not given, the hash of the password will be used instead.
  * @returns {Promise<CryptoKey>} The generated CryptoKey.
  * @throws {TypeError} Thrown if the `password` is not a non-empty string or if the configuration options are invalid.
  */
@@ -216,9 +216,9 @@ export async function createSecretKeyFromPassword(pass, {
 } = {}) {
 	if (typeof pass !== 'string' || pass.length === 0) {
 		throw new TypeError('Key password must be a non-empty string.');
-	} else if (salt instanceof Uint8Array) {
-		return await createSecretKeyFromPassword(pass, { name, length, hash: hashAlgo, iterations, extractable, usages, salt: salt.buffer });
-	} else if (! (salt instanceof ArrayBuffer)) {
+	} else if (typeof salt === 'string') {
+		return await createWrappingKeyFromPassword(pass, { name, length, hash, iterations, extractable, usages, salt: Uint8Array.fromBase64(salt) });
+	} else if (! (salt instanceof ArrayBuffer || ArrayBuffer.isView(salt))) {
 		return await createSecretKeyFromPassword(pass, {
 			name, length, hash: hashAlgo, iterations, extractable, usages,
 			salt: await hash(encoder.encode(`${name}:${hashAlgo}:${pass}`), SHA256)

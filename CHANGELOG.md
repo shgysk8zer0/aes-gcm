@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.0.4] - 2024-12-18
+
 ### Changed
+- Use PBKDF2 to derive keys using passwords
 - Derive random IV if not given based on key, not in default value to function arguments
 
 ## [v1.0.3] - 2024-12-16
