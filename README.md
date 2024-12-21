@@ -222,3 +222,22 @@ console.log(isValid); // true
 |--------|------|---------|-------------|
 | `algo` | `string` | `'SHA-256'` | The hashing algorithm used for signing. |
 | `input` | `string` | `'hex'` | The input format of the signature if it's a string. |
+
+#### Encrypt File
+
+`encryptFile(key, file, name)`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `key` | `CryptoKey` | `required` | A cryptographic key for encryption. |
+| `file` | `File` | `required` | The file to encrypt. |
+| `name` | `string` | `Date.now().toString(36) + FILE_EXT` | The name of the encrypted file. |
+
+#### Decrypt File
+
+`decryptFile(key, file)`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `key` | `CryptoKey` | `required` | A cryptographic key for decryption. |
+| `file` | `File` | `required` | The file to decrypt. |
