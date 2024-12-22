@@ -8,6 +8,7 @@ import {
 	createSecretKeyFromPassword, encryptFile, decryptFile, wrapKey, generateWrappingKey, unwrapKey,
 	createWrappingKeyFromPassword, WRAP_USAGES, ENCRYPT_USAGES, wrapAndEncodeKey, unwrapAndDecodeKey, generateIV,
 	AES_GCM_LENGTH, AES_CBC, AES_CBC_LENGTH, DEFAULT_ALGO_NAME,
+	// FILE_EXT,
 } from '@shgysk8zer0/aes-gcm';
 
 describe('Test encryption and decryption', async () => {
@@ -148,5 +149,22 @@ describe('Test encryption and decryption', async () => {
 	test('Verify encrypted signatures (text version)', { signal }, async () => {
 		const signature = await sign(key, input, { output: HEX });
 		assert.ok(await verifySignature(key, input, signature, { input: HEX }), 'Signature should match via text.');
+	});
+
+	test('Encrypt file using file bytes as salt of password-based key', { signal }, async () => {
+		const salt = crypto.getRandomValues(new Uint8Array(16));
+		const key = await createSecretKeyFromPassword('Super secret password', { salt });
+		const file = new File([input], 'hi.txt', { type: 'text/plain', lastModified: 1734558957856 });
+		const encrypted = await encryptFile(key, file, { metadata: salt.toBase64() });
+		const bytes = await encrypted.bytes();
+		const headerLen = bytes[0];
+		const header = new TextDecoder().decode(bytes.subarray(1, headerLen + 1));
+		const [,encodedSalt] = header.split('\n');
+		const restoredKey = await createSecretKeyFromPassword('Super secret password', {
+			salt: Uint8Array.fromBase64(JSON.parse(encodedSalt)),
+		});
+		const decrypted = await decryptFile(restoredKey, encrypted);
+
+		assert.strictEqual(input, await decrypted.text(), 'File should decrpyt to have the exact same content.');
 	});
 });

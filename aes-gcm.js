@@ -217,7 +217,7 @@ export async function createSecretKeyFromPassword(pass, {
 	if (typeof pass !== 'string' || pass.length === 0) {
 		throw new TypeError('Key password must be a non-empty string.');
 	} else if (typeof salt === 'string') {
-		return await createWrappingKeyFromPassword(pass, { name, length, hash, iterations, extractable, usages, salt: Uint8Array.fromBase64(salt) });
+		return await createSecretKeyFromPassword(pass, { name, length, hash, iterations, extractable, usages, salt: Uint8Array.fromBase64(salt) });
 	} else if (! (salt instanceof ArrayBuffer || ArrayBuffer.isView(salt))) {
 		return await createSecretKeyFromPassword(pass, {
 			name, length, hash: hashAlgo, iterations, extractable, usages,
@@ -426,15 +426,25 @@ export async function verifySignature(key, source, signature, {
  *
  * @param {CryptoKey} key A cryptographic key for encryption.
  * @param {File} file The file to encrypt.
+ * @param {object} options
+ * @param {string} [options.name] The name of the encrypted file. Defaults to a timestamp with a custom extension.
+ * @param {*} [options.metadata=null] Additional metadata to store with the encrypted file.
+ * @param {Uint8Array|void} [options.iv] Optional Inititialization Vector.
  * @returns {Promise<File>} A new File instance with encrypted content.
  * @throws {TypeError} If `file` is not a valid File object or `key` is not a valid `CryptoKey`
  */
-export async function encryptFile(key, file, name = Date.now().toString(36) + FILE_EXT) {
-	if (! (file instanceof File)) {
+export async function encryptFile(key, file, {
+	name = Date.now().toString(36) + FILE_EXT,
+	metadata = null,
+	iv,
+} = {}) {
+	if (typeof iv === 'undefined') {
+		return await encryptFile(key, file, { name, metadata, iv: generateIV(key) });
+	} else if (! (file instanceof File)) {
 		throw new TypeError('encryptFile requires a File object.');
 	} else {
 		const fileContent = await file.bytes();
-		const headerContent = encoder.encode(`${key.algorithm.name.toLowerCase()}-${key.algorithm.length}`);
+		const headerContent = encoder.encode(`${key.algorithm.name.toLowerCase()}-${key.algorithm.length}\n${JSON.stringify(metadata)}\n${iv.toBase64()}\n`);
 		const fileHeader = encoder.encode(`${file.name},${file.type},${file.lastModified.toString()}`);
 		const header = new Uint8Array(headerContent.length + 1);
 		header.set([header.length], 0);
@@ -443,7 +453,7 @@ export async function encryptFile(key, file, name = Date.now().toString(36) + FI
 		fileData.set([fileHeader.length], 0);
 		fileData.set(fileHeader, 1);
 		fileData.set(fileContent, fileHeader.length + 1);
-		const encrypted = await encrypt(key, fileData, { output: UI8_ARR });
+		const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: key.algorithm.name, iv }, key, fileData));
 		const result = new Uint8Array(encrypted.length + header.length + 1);
 		result.set([header.length], 0);
 		result.set(header, 1);
@@ -469,8 +479,10 @@ export async function decryptFile(key, file) {
 	} else {
 		const bytes = await file.bytes();
 		const headerLength = bytes[0];
+		const headers = decoder.decode(bytes.subarray(1, headerLength + 1)).split('\n');
+		const iv = Uint8Array.fromBase64(headers.at(-2));
 		const encrypted = bytes.subarray(headerLength + 1);
-		const decryptedBytes = await decrypt(key, encrypted, { output: UI8_ARR });
+		const decryptedBytes = new Uint8Array(await crypto.subtle.decrypt({ name: key.algorithm.name, iv }, key, encrypted));
 		const decryptedHeaderLength = decryptedBytes[0];
 		const decryptedHeader = decoder.decode(decryptedBytes.subarray(1, decryptedHeaderLength + 1));
 		const decryptedContent = decryptedBytes.subarray(decryptedHeaderLength + 1);
