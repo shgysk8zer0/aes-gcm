@@ -7,8 +7,7 @@ import {
 	generateSecretKey, encrypt, decrypt, sign, verifySignature, hash, verify, getSecretKey, HEX, TEXT, BASE64, SHA512,
 	createSecretKeyFromPassword, encryptFile, decryptFile, wrapKey, generateWrappingKey, unwrapKey,
 	createWrappingKeyFromPassword, WRAP_USAGES, ENCRYPT_USAGES, wrapAndEncodeKey, unwrapAndDecodeKey, generateIV,
-	AES_GCM_LENGTH, AES_CBC, AES_CBC_LENGTH, DEFAULT_ALGO_NAME,
-	// FILE_EXT,
+	AES_GCM_LENGTH, AES_CBC, AES_CBC_LENGTH, DEFAULT_ALGO_NAME, MAGIC_STR_LEN, HEADER_SIZE,
 } from '@shgysk8zer0/aes-gcm';
 
 describe('Test encryption and decryption', async () => {
@@ -152,18 +151,21 @@ describe('Test encryption and decryption', async () => {
 	});
 
 	test('Encrypt file using file bytes as salt of password-based key', { signal }, async () => {
-		const salt = crypto.getRandomValues(new Uint8Array(16));
-		const key = await createSecretKeyFromPassword('Super secret password', { salt });
+		const salt = crypto.getRandomValues(new Uint8Array(32));
+		const key = await createSecretKeyFromPassword('Super secret password', { salt, name: AES_CBC });
+		const iv = generateIV(key);
 		const file = new File([input], 'hi.txt', { type: 'text/plain', lastModified: 1734558957856 });
-		const encrypted = await encryptFile(key, file, { metadata: salt.toBase64() });
+		const encrypted = await encryptFile(key, file, { metadata: { salt: salt.toBase64() }, iv });
 		const bytes = await encrypted.bytes();
-		const headerLen = bytes[0];
-		const header = new TextDecoder().decode(bytes.subarray(1, headerLen + 1));
-		const [,encodedSalt] = header.split('\n');
-		const restoredKey = await createSecretKeyFromPassword('Super secret password', {
-			salt: Uint8Array.fromBase64(JSON.parse(encodedSalt)),
-		});
+		const header = bytes.subarray(0, HEADER_SIZE);
+
+		// ESlint compains about the RegExp...
+		/* eslint-disable-next-line */
+		const metadata = JSON.parse(new TextDecoder().decode(header.subarray(17 + header[MAGIC_STR_LEN])).replaceAll(/(\u0000)*$/g, ''));
+		const metaSalt = Uint8Array.fromBase64(metadata.salt);
+		const restoredKey = await createSecretKeyFromPassword('Super secret password', { salt: metaSalt, name: AES_CBC });
 		const decrypted = await decryptFile(restoredKey, encrypted);
+		console.log(await encrypted.text());
 
 		assert.strictEqual(input, await decrypted.text(), 'File should decrpyt to have the exact same content.');
 	});
