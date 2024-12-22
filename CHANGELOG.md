@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.0.7] - 2024-12-22
+
+### Fixed
+- Match versions across `git tag -v`, `package.json`, and `CHANGELOG.md`
+
 ## [v1.0.6] - 2024-12-22
 
 ### Changed
