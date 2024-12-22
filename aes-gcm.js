@@ -34,7 +34,9 @@ export const DEFAULT_OUTPUT = UI8_ARR;
 
 // File-related constants
 export const FILE_EXT = '.enc';
-export const FILE_TYPE_PREFIX = 'application/aes-encrypted+';
+export const FILE_VERSION = 1;
+export const HEADER_SIZE = 128;
+export const MAGIC_STR_LEN = 16;
 
 /**
  * Encode `Uint8Array` bytes into various formats
@@ -217,7 +219,7 @@ export async function createSecretKeyFromPassword(pass, {
 	if (typeof pass !== 'string' || pass.length === 0) {
 		throw new TypeError('Key password must be a non-empty string.');
 	} else if (typeof salt === 'string') {
-		return await createWrappingKeyFromPassword(pass, { name, length, hash, iterations, extractable, usages, salt: Uint8Array.fromBase64(salt) });
+		return await createSecretKeyFromPassword(pass, { name, length, hash, iterations, extractable, usages, salt: Uint8Array.fromBase64(salt) });
 	} else if (! (salt instanceof ArrayBuffer || ArrayBuffer.isView(salt))) {
 		return await createSecretKeyFromPassword(pass, {
 			name, length, hash: hashAlgo, iterations, extractable, usages,
@@ -426,28 +428,49 @@ export async function verifySignature(key, source, signature, {
  *
  * @param {CryptoKey} key A cryptographic key for encryption.
  * @param {File} file The file to encrypt.
+ * @param {object} options
+ * @param {string} [options.name] The name of the encrypted file. Defaults to a timestamp with a custom extension.
+ * @param {*} [options.metadata=null] Additional metadata to store with the encrypted file.
+ * @param {Uint8Array|void} [options.iv] Optional Inititialization Vector.
  * @returns {Promise<File>} A new File instance with encrypted content.
  * @throws {TypeError} If `file` is not a valid File object or `key` is not a valid `CryptoKey`
  */
-export async function encryptFile(key, file, name = Date.now().toString(36) + FILE_EXT) {
-	if (! (file instanceof File)) {
+export async function encryptFile(key, file, {
+	name,
+	metadata = null,
+	iv,
+} = {}) {
+	if (typeof iv === 'undefined') {
+		return await encryptFile(key, file, { name, metadata, iv: generateIV(key) });
+	} else if (! (file instanceof File)) {
 		throw new TypeError('encryptFile requires a File object.');
 	} else {
-		const fileContent = await file.bytes();
-		const headerContent = encoder.encode(`${key.algorithm.name.toLowerCase()}-${key.algorithm.length}`);
+		// Create file header of fixed length
+		const header = new Uint8Array(HEADER_SIZE);
+		// Fixed length "Magic Number"
+		const magicStr = `${key.algorithm.name.toLowerCase()}-${key.algorithm.length} ${FILE_VERSION}`.padEnd(MAGIC_STR_LEN,' ');
+		const magicBytes = encoder.encode(magicStr);
+
+		// Fill the header data with magic numbers, iv length, iv, and encoded metadata
+		header.set(magicBytes, 0);
+		header.set([iv.length], magicBytes.length);
+		header.set(iv, magicBytes.length + 1);
+		header.set(encoder.encode(JSON.stringify(metadata)), magicBytes.length + iv.length + 1);
+
+		// Create File header with file metadata, prefixed by header length for predictable parsing
 		const fileHeader = encoder.encode(`${file.name},${file.type},${file.lastModified.toString()}`);
-		const header = new Uint8Array(headerContent.length + 1);
-		header.set([header.length], 0);
-		header.set(headerContent, 1);
-		const fileData = new Uint8Array(fileHeader.length + fileContent.length + 1);
-		fileData.set([fileHeader.length], 0);
-		fileData.set(fileHeader, 1);
-		fileData.set(fileContent, fileHeader.length + 1);
-		const encrypted = await encrypt(key, fileData, { output: UI8_ARR });
-		const result = new Uint8Array(encrypted.length + header.length + 1);
-		result.set([header.length], 0);
-		result.set(header, 1);
-		result.set(encrypted, header.length + 1);
+		const bytes = await file.bytes();
+		const data = new Uint8Array(fileHeader.length + bytes.length + 1);
+		data.set([fileHeader.length], 0);
+		data.set(fileHeader, 1);
+		data.set(bytes, fileHeader.length + 1);
+
+		const encrypted = new Uint8Array(await crypto.subtle.encrypt({ ...key.algorithm, iv }, key, data));
+
+		// Resulting data is the header + encrypted payload
+		const result = new Uint8Array(header.length + encrypted.length);
+		result.set(header, 0);
+		result.set(encrypted, header.length);
 
 		return new File([result], name ?? `${file.name}${FILE_EXT}`, {
 			type: `application/x-${key.algorithm.name.toLowerCase()}-${key.algorithm.length}+encrypted`
@@ -459,24 +482,28 @@ export async function encryptFile(key, file, name = Date.now().toString(36) + FI
  * Decrypts a file encrypted by `encryptFile`.
  *
  * @param {CryptoKey} key A cryptographic key for decryption.
- * @param {File} file The file to decrypt.
+ * @param {Blob|File} file The file to decrypt (Blob ok since name is not important)
  * @return {Promise<File>} A new File instance with decrypted content, having name and metadata of the original.
  * @throws {TypeError} If `file` is not a valid File object or `key` is not a valid `CryptoKey`
  */
 export async function decryptFile(key, file) {
-	if (! (file instanceof File)) {
-		throw new TypeError('decryptFile requires a File object.');
+	if (! (file instanceof Blob)) {
+		throw new TypeError('decryptFile requires a File or Blob object.');
 	} else {
+		// Get the file header and encrypted payload
 		const bytes = await file.bytes();
-		const headerLength = bytes[0];
-		const encrypted = bytes.subarray(headerLength + 1);
-		const decryptedBytes = await decrypt(key, encrypted, { output: UI8_ARR });
-		const decryptedHeaderLength = decryptedBytes[0];
-		const decryptedHeader = decoder.decode(decryptedBytes.subarray(1, decryptedHeaderLength + 1));
-		const decryptedContent = decryptedBytes.subarray(decryptedHeaderLength + 1);
+		const header = bytes.subarray(0, HEADER_SIZE);
+		const payload = bytes.subarray(HEADER_SIZE);
+
+		// IV length is the first byte after the fixed length magic number
+		const iv = header.subarray(MAGIC_STR_LEN + 1, MAGIC_STR_LEN + 1 + header[MAGIC_STR_LEN]);
+		const decrypted = new Uint8Array(await crypto.subtle.decrypt({ ...key.algorithm, iv }, key, payload));
+
+		// [header length byte, name, type, lastModified, ...file data]
+		const decryptedHeader = decoder.decode(decrypted.subarray(1, decrypted[0] + 1));
 		const [name, type, lastModified] = decryptedHeader.split(',');
 
-		return new File([decryptedContent], name, { type, lastModified: parseInt(lastModified) });
+		return new File([decrypted.subarray(decryptedHeader.length + 1)], name, { type, lastModified: parseInt(lastModified) });
 	}
 }
 
