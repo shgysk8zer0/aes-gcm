@@ -165,7 +165,6 @@ describe('Test encryption and decryption', async () => {
 		const metaSalt = Uint8Array.fromBase64(metadata.salt);
 		const restoredKey = await createSecretKeyFromPassword('Super secret password', { salt: metaSalt, name: AES_CBC });
 		const decrypted = await decryptFile(restoredKey, encrypted);
-		console.log(await encrypted.text());
 
 		assert.strictEqual(input, await decrypted.text(), 'File should decrpyt to have the exact same content.');
 	});
