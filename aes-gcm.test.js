@@ -7,7 +7,8 @@ import {
 	generateSecretKey, encrypt, decrypt, sign, verifySignature, hash, verify, getSecretKey, HEX, TEXT, BASE64, SHA512,
 	createSecretKeyFromPassword, encryptFile, decryptFile, wrapKey, generateWrappingKey, unwrapKey,
 	createWrappingKeyFromPassword, WRAP_USAGES, ENCRYPT_USAGES, wrapAndEncodeKey, unwrapAndDecodeKey, generateIV,
-	AES_GCM_LENGTH, AES_CBC, AES_CBC_LENGTH, DEFAULT_ALGO_NAME, MAGIC_STR_LEN, HEADER_SIZE,
+	AES_GCM_LENGTH, AES_CBC, AES_CBC_LENGTH, DEFAULT_ALGO_NAME, MAGIC_STR_LEN, HEADER_SIZE, encryptResponse,
+	decryptResponse, IV_HEADER,
 } from '@shgysk8zer0/aes-gcm';
 
 describe('Test encryption and decryption', async () => {
@@ -17,7 +18,7 @@ describe('Test encryption and decryption', async () => {
 	const inputHash = '374d794a95cdcfd8b35993185fef9ba368f160d8daf432d08ba9f1ed1e5abe6cc69291e0fa2fe0006a52570ef18c19def4e617c33ce52ef0a6e5fbe318cb0387';
 
 	// Disable complaining about events on `signal`
-	setMaxListeners(15, signal);
+	setMaxListeners(16, signal);
 
 	test('Secret keys should be able to be import from `process.env`', { signal }, async () => {
 		const key = await getSecretKey();
@@ -167,5 +168,20 @@ describe('Test encryption and decryption', async () => {
 		const decrypted = await decryptFile(restoredKey, encrypted);
 
 		assert.strictEqual(input, await decrypted.text(), 'File should decrpyt to have the exact same content.');
+	});
+
+	test('Test encryption and decryption streams.', { signal }, async () => {
+		const iv = crypto.getRandomValues(new Uint8Array(12));
+		const resp = new Response(input, { headers: { 'Content-Type': 'text/plain' }});
+		const encrypted = encryptResponse(key, iv, resp, { signal });
+		const decrypted = decryptResponse(key, encrypted, { signal });
+
+		assert.ok(encrypted instanceof Response, 'Encrypted should be a Response');
+		assert.ok(decrypted instanceof Response, 'Decrypted should be a Response');
+		assert.ok(encrypted.headers.has(IV_HEADER), 'Encrpyted response should add IV to the headers.');
+		assert.strictEqual(decrypted.headers.get('Content-Type'), 'text/plain', 'Content-Type header should be preserved.');
+		assert.ok(! resp.headers.has(IV_HEADER), 'Original response headers should not be changed.');
+		assert.ok(! decrypted.headers.has(IV_HEADER), 'Decrypted response should have the IV header removed..');
+		assert.strictEqual(await decrypted.text(), input, 'Streams should decrypt back to the original input.');
 	});
 });
