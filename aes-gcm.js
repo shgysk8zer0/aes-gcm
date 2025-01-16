@@ -37,6 +37,7 @@ export const FILE_EXT = '.enc';
 export const FILE_VERSION = 1;
 export const HEADER_SIZE = 128;
 export const MAGIC_STR_LEN = 16;
+export const IV_HEADER = 'X-ENC-IV';
 
 /**
  * Encode `Uint8Array` bytes into various formats
@@ -294,6 +295,145 @@ export async function encrypt(key, thing, {
 		return _encode(bytes, output);
 	} else {
 		throw new TypeError('Unsupported type/class to encrypt.');
+	}
+}
+
+/**
+ * A TransformStream that encrypts chunks of data.
+ *
+ * @extends {TransformStream<Uint8Array>}
+ */
+export class EncryptionStream extends TransformStream {
+	/**
+	 * Creates a new EncryptionStream.
+	 *
+	 * @param {CryptoKey} key - The encryption key. Must have the 'encrypt' usage flag.
+	 * @param {Uint8Array} [iv] - The initialization vector. If not provided, a new one will be generated.
+	 * @throws {TypeError} If the key is invalid or the IV is not a Uint8Array.
+	 */
+	constructor(key, iv) {
+		if (! (key instanceof CryptoKey) || ! key.usages.includes('encrypt')) {
+			throw new TypeError('Invalid key.');
+		}
+
+		if (typeof iv === 'undefined') {
+			iv = generateIV(key);
+		} else if (! (iv instanceof Uint8Array)) {
+			throw new TypeError('Invalid IV.');
+		}
+
+		super({
+			async transform(chunk, controller) {
+				try {
+					const encrypted = await crypto.subtle.encrypt({ name: key.algorithm.name, iv }, key, chunk);
+					controller.enqueue(new Uint8Array(encrypted));
+				} catch(err) {
+					controller.error(err);
+					controller.terminate();
+				}
+			}
+		});
+	}
+}
+
+/**
+ * A TransformStream that decrypts chunks of data.
+ *
+ * @extends {TransformStream<Uint8Array>}
+ */
+export class DecryptionStream extends TransformStream {
+	/**
+	 * Creates a new DecryptionStream.
+	 *
+	 * @param {CryptoKey} key - The decryption key. Must have the 'decrypt' usage flag.
+	 * @param {Uint8Array} iv - The initialization vector.
+	 * @throws {TypeError} If the key is invalid or the IV is not a Uint8Array.
+	 */
+	constructor(key, iv) {
+		if (! (key instanceof CryptoKey) || ! key.usages.includes('decrypt')) {
+			throw new TypeError('Invalid key.');
+		} else if (! (iv instanceof Uint8Array)) {
+			throw new TypeError('Invalid IV.');
+		} else {
+			super({
+				async transform(chunk, controller) {
+					try {
+						const decrypted = await crypto.subtle.decrypt({ name: key.algorithm.name, iv }, key, chunk);
+						controller.enqueue(new Uint8Array(decrypted));
+					} catch(err) {
+						controller.error(err);
+						controller.terminate();
+					}
+				}
+			});
+		}
+	}
+}
+
+/**
+ * Encrypts the given Response object using the provided key and initialization vector (IV).
+ *
+ * @param {CryptoKey} key - The encryption key. Must be a CryptoKey with the 'encrypt' usage flag.
+ * @param {Uint8Array} iv - The initialization vector for encryption. Must be a non-empty Uint8Array.
+ * @param {Response} resp - The Response object to encrypt.
+ * @param {object} [options] - Optional options object.
+ * @param {AbortSignal} [options.signal] - An AbortSignal to abort the encryption operation.
+ * @returns {Response} - A new Response object containing the encrypted data.
+ * @throws {TypeError} - If the key is invalid, the response is not a Response object, the IV is invalid, or the signal is aborted.
+ */
+export function encryptResponse(key, iv, resp, { signal } = {}) {
+	if (! (key instanceof CryptoKey && key.usages.includes('encrypt'))) {
+		throw new TypeError('Key is not a valid encryption key.');
+	} else if (! (resp instanceof Response)) {
+		throw new TypeError('Not a `Response`.');
+	} else if (! (iv instanceof Uint8Array || iv.length === 0)) {
+		throw new TypeError('IV must be a non-empty `Uint8Array`.');
+	} else if (signal instanceof AbortSignal && signal.aborted) {
+		throw signal.reason;
+	} else {
+		const headers = new Headers(resp.headers);
+		const stream = resp.body.pipeThrough(new EncryptionStream(key, iv), { signal });
+		headers.set(IV_HEADER, iv.toBase64({ alphabet: 'base64' }));
+
+		return new Response(stream, {
+			status: resp.status,
+			statusText: resp.statusText,
+			headers,
+		});
+	}
+}
+
+/**
+ * Decrypts the given Response object using the provided key.
+ * The IV for decryption is expected to be present in the Response headers under the `X-ENC-IV` key.
+ *
+ * @param {CryptoKey} key - The decryption key. Must be a CryptoKey with the 'decrypt' usage flag.
+ * @param {Response} resp - The Response object to decrypt.
+ * @param {object} [options] - Optional options object.
+ * @param {AbortSignal} [options.signal] - An AbortSignal to abort the decryption operation.
+ * @returns {Response} - A new Response object containing the decrypted data.
+ * @throws {TypeError} - If the key is invalid, the response is not a Response object, the IV header is missing, or the signal is aborted.
+ */
+export function decryptResponse(key, resp, { signal } = {}) {
+	if (! (key instanceof CryptoKey && key.usages.includes('decrypt'))) {
+		throw new TypeError('Key is not a valid decryption key.');
+	} else if (! (resp instanceof Response)) {
+		throw new TypeError('Not a `Response`.');
+	} else if (! resp.headers.has(IV_HEADER)) {
+		throw new TypeError('Response is missing required IV header.');
+	} else if (signal instanceof AbortSignal && signal.aborted) {
+		throw signal.reason;
+	} else {
+		const iv = Uint8Array.fromBase64(resp.headers.get(IV_HEADER), { alphabet: 'base64' });
+		const stream = resp.body.pipeThrough(new DecryptionStream(key, iv), { signal });
+		const headers = new Headers(resp.headers);
+		headers.delete(IV_HEADER);
+
+		return new Response(stream, {
+			status: resp.status,
+			statusText: resp.statusText,
+			headers,
+		});
 	}
 }
 
