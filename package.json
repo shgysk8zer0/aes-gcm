@@ -75,7 +75,7 @@
   },
   "homepage": "https://github.com/shgysk8zer0/aes-gcm#readme",
   "devDependencies": {
-    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-terser": "^1.0.0",
     "@shgysk8zer0/eslint-config": "^1.0.3",
     "@shgysk8zer0/polyfills": "^0.6.0"
   }
