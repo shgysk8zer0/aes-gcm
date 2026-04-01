@@ -1,4 +1,4 @@
-import '@shgysk8zer0/polyfills';
+// import '@shgysk8zer0/polyfills';
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFile } from 'node:fs/promises';
