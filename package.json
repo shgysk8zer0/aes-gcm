@@ -1,6 +1,6 @@
 {
   "name": "@shgysk8zer0/aes-gcm",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "A JWK-base crypto library using AES-GCM secret keys",
   "keywords": [
     "crypto",
@@ -76,7 +76,6 @@
   "homepage": "https://github.com/shgysk8zer0/aes-gcm#readme",
   "devDependencies": {
     "@rollup/plugin-terser": "^1.0.0",
-    "@shgysk8zer0/eslint-config": "^1.0.3",
-    "@shgysk8zer0/polyfills": "^0.6.0"
+    "@shgysk8zer0/eslint-config": "^1.0.9"
   }
 }
